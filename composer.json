@@ -3,7 +3,7 @@
     "description": "External API repository layer for mgamadeus/ddd — batched HTTP calls with multi-tier caching",
     "minimum-stability": "stable",
     "license": "MIT",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "authors": [
         {
             "name": "Marius-Eugen Gerdan",
@@ -16,9 +16,7 @@
     },
     "autoload": {
         "psr-4": {
-            "DDD\\Modules\\Argus\\": "src/",
-            "DDD\\Domain\\Base\\Repo\\Argus\\": "src/Domain/Base/Repo/Argus/",
-            "DDD\\Presentation\\Api\\Batch\\Base\\": "src/Presentation/Api/Batch/Base/"
+            "DDD\\": "src/"
         }
     },
     "extra": {
