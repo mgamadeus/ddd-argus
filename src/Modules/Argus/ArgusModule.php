@@ -10,7 +10,7 @@ class ArgusModule extends DDDModule
 {
     public static function getSourcePath(): string
     {
-        return __DIR__;
+        return __DIR__ . '/../..';
     }
 
     public static function getConfigPath(): ?string
