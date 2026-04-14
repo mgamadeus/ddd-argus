@@ -344,7 +344,7 @@ class ArgusApiOperations
         $microserviceBaseUrl = Config::getEnv('ARGUS_API_ENDPOINT');
         $adminAcount = DDDService::instance()->getDefaultAccountForCliOperations();
         if ($adminAcount) {
-            $refreshToken = (string)AuthService::instance()->getRefreshTokenForAccountId(
+            $refreshToken = AuthService::instance()->getRefreshTokenForAccountId(
                 $adminAcount->id,
                 isShortLived: false
             );

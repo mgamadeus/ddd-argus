@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DDD\Domain\Base\Repo\Argus\Traits;
 
+use DDD\Domain\Base\Entities\BaseObject;
 use DDD\Domain\Base\Entities\DefaultObject;
 use DDD\Domain\Base\Entities\Entity;
 use DDD\Domain\Base\Entities\EntitySet;
@@ -80,6 +81,7 @@ trait ArgusTrait
                         $argusInstance = new $argusClassName();
                         $argusInstance->fromEntity($element);
                         $argusInstance->setParent($this);
+                        /** @var BaseObject $argusInstance */
                         $this->add($argusInstance);
                     } else {
                         $element->setParent($this);

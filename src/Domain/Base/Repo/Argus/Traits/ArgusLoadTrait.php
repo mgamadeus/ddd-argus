@@ -138,7 +138,6 @@ trait ArgusLoadTrait
     public function argusPrepareLoad(bool $useArgusEntityCache = true, bool $autoloadCurrentObject = true): void
     {
         if ($this->argusSettings->isLoaded || $this->argusSettings->loadingPrepared) {
-            echo "12";
             return;
         } //already loaded
         $this->argusSettings->initOperations();
