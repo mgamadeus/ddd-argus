@@ -1,0 +1,26 @@
+{
+    "name": "mgamadeus/ddd-argus",
+    "description": "External API repository layer for mgamadeus/ddd — batched HTTP calls with multi-tier caching",
+    "minimum-stability": "stable",
+    "license": "MIT",
+    "version": "1.0.0",
+    "authors": [
+        {
+            "name": "Marius-Eugen Gerdan",
+            "email": "marius@gerdan.net"
+        }
+    ],
+    "require": {
+        "mgamadeus/ddd": "^2.9",
+        "guzzlehttp/guzzle": "^7.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "DDD\\Modules\\Argus\\": "src/",
+            "DDD\\Domain\\Base\\Repo\\Argus\\": "src/Domain/Base/Repo/Argus/"
+        }
+    },
+    "extra": {
+        "ddd-module": "DDD\\Modules\\Argus\\ArgusModule"
+    }
+}
