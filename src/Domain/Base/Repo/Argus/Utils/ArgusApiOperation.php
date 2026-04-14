@@ -4,8 +4,9 @@ declare (strict_types=1);
 
 namespace DDD\Domain\Base\Repo\Argus\Utils;
 
-use DDD\Domain\Base\Repo\Argus\Enums\ArgusApiOperationType;
 use DDD\Domain\Base\Entities\DefaultObject;
+use DDD\Domain\Base\Repo\Argus\Enums\ArgusApiOperationType;
+use DDD\Domain\Base\Repo\Argus\Traits\ArgusLoadTrait;
 use DDD\Infrastructure\Traits\Serializer\SerializerTrait;
 
 /**
@@ -16,12 +17,19 @@ class ArgusApiOperation
 {
     use SerializerTrait;
 
+    /** @var DefaultObject|null|ArgusLoadTrait */
     public DefaultObject|null $entity;
+
     public ?string $id;
+
     public ?string $endpoint;
+
     public ?array $params;
+
     public ?array $generalParams;
+
     public array|object|null $results;
+
     public int $mergelimit = 1;
 
     public function __construct(
@@ -29,8 +37,7 @@ class ArgusApiOperation
         string $id,
         string $endpoint,
         array &$payload,
-    )
-    {
+    ) {
         $this->entity = $entity;
         $this->id = $id;
         if (isset($payload['path'])) {
@@ -79,8 +86,7 @@ class ArgusApiOperation
     public function handleResponse(
         mixed $results,
         ArgusApiOperationType $operationType = ArgusApiOperationType::LOAD
-    ): void
-    {
+    ): void {
         $this->results = $results;
         if ($operationType === ArgusApiOperationType::LOAD) {
             $this->entity->handleLoadResponse($results, $this);

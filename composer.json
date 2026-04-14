@@ -11,7 +11,7 @@
         }
     ],
     "require": {
-        "mgamadeus/ddd": "^2.9",
+        "mgamadeus/ddd": "^2.10",
         "guzzlehttp/guzzle": "^7.5"
     },
     "autoload": {
@@ -22,5 +22,10 @@
     },
     "extra": {
         "ddd-module": "DDD\\Modules\\Argus\\ArgusModule"
+    },
+    "config": {
+        "allow-plugins": {
+            "symfony/runtime": true
+        }
     }
 }
