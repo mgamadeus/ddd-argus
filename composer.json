@@ -3,7 +3,7 @@
     "description": "External API repository layer for mgamadeus/ddd — batched HTTP calls with multi-tier caching",
     "minimum-stability": "stable",
     "license": "MIT",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "authors": [
         {
             "name": "Marius-Eugen Gerdan",
