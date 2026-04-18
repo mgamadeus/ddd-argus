@@ -1,5 +1,5 @@
 ---
-name: argus-module-specialist
+name: ddd-module-argus-specialist
 description: Create and work with Argus external API repositories in the ddd-argus module -- batched HTTP calls, multi-tier caching, CRUD operations, bidirectional entity conversion, and selective property loading. Use when integrating external APIs via the Argus pattern.
 metadata:
   author: mgamadeus

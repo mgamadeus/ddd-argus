@@ -284,12 +284,14 @@ class ArgusApiOperations
                 if (!isset($traceElement['class'])) {
                     continue;
                 }
-                $classWithNamespace = new ClassWithNamespace($traceElement['class']);
+                /** @var string $className */
+                $className = $traceElement['class'];
+                $classWithNamespace = new ClassWithNamespace($className);
                 if (isset($classesToIgnore[$classWithNamespace->name])) {
                     continue;
                 }
-                if (is_a($traceElement['class'], AppMessageHandler::class, true)) {
-                    $messageHandlerReflectionClass = ReflectionClass::instance((string)$traceElement['class']);
+                if (is_a($className, AppMessageHandler::class, true)) {
+                    $messageHandlerReflectionClass = ReflectionClass::instance($className);
                     /** @var AsMessageHandler $asMessageHandlerAttribute */
                     $asMessageHandlerAttribute = $messageHandlerReflectionClass->getAttributeInstance(
                         AsMessageHandler::class
@@ -297,8 +299,8 @@ class ArgusApiOperations
                     if ($asMessageHandlerAttribute && $asMessageHandlerAttribute->fromTransport) {
                         $messageHandler = $asMessageHandlerAttribute->fromTransport;
                     }
-                } elseif (is_a($traceElement['class'], Command::class, true)) {
-                    $commandReflectionClass = ReflectionClass::instance((string)$traceElement['class']);
+                } elseif (is_a($className, Command::class, true)) {
+                    $commandReflectionClass = ReflectionClass::instance($className);
                     /** @var AsCommand $asCommandAttribute */
                     $asCommandAttribute = $commandReflectionClass->getAttributeInstance(AsCommand::class);
                     if ($asCommandAttribute && $asCommandAttribute->name) {
@@ -361,7 +363,7 @@ class ArgusApiOperations
 
         foreach ($callData as $endpoint => $parameters) {
             // microservice calls have request method as prefix
-            preg_match('/^(?P<method>(GET|PUT|POST|DELETE|PATCH)):(?P<url>[\S]+)/', $endpoint, $matches);
+            preg_match('/^(?P<method>(GET|PUT|POST|DELETE|PATCH)):(?P<url>\S+)/', $endpoint, $matches);
             if (isset($matches['url']) && isset($matches['method'])) {
                 $urlPathString = $matches['url'];
                 if ($urlPathString && $urlPathString[0] != '/' && strpos($urlPathString, 'http') === false) {
