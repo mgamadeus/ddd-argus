@@ -6,7 +6,7 @@ External API repository layer for the `mgamadeus/ddd` framework -- batched HTTP 
 **Namespace:** `DDD\`
 **Depends on:** `mgamadeus/ddd` (^2.10)
 
-> **This module follows all DDD Core conventions.** For base patterns, see skills in `vendor/mgamadeus/ddd`.
+> **This module follows all DDD Core conventions.** For base patterns, see `vendor/mgamadeus/ddd/AGENTS.md` and skills in `vendor/mgamadeus/ddd`.
 
 ## Architecture
 
