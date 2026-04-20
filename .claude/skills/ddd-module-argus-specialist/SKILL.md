@@ -72,15 +72,77 @@ class ArgusMyEntity extends MyEntity
 - `uniqueKey()` must be deterministic for cache stability
 - Always call `$this->postProcessLoadResponse($callResponseData, $success)` at the end of `handleLoadResponse()`
 
-## Binding to Domain Entity
+## Naming Convention
+
+The Argus repo class name is always `Argus` + the domain entity class name:
+
+| Domain Entity | Argus Repo |
+|---|---|
+| `SupportTicketAnalyzer` | `ArgusSupportTicketAnalyzer` |
+| `ChatMessageModeration` | `ArgusChatMessageModeration` |
+| `SupportEmailCleaned` | `ArgusSupportEmailCleaned` |
+
+The Argus class **extends** the domain entity: `class ArgusChatMessageModeration extends ChatMessageModeration`
+
+**NEVER** suffix the domain entity with `Result`, `Response`, `Data`, etc. The Argus class name = `Argus` + exact domain entity name.
+
+## Binding: Two-Sided LazyLoad Wiring (CRITICAL)
+
+Argus lazy-loading requires attributes on **both sides** -- the domain entity AND the parent entity property. Missing either side causes silent failures.
+
+### Side 1: Domain entity class -- `#[LazyLoadRepo]`
+
+The domain entity (value object) declares which Argus repo class loads it:
 
 ```php
 #[LazyLoadRepo(LazyLoadRepo::ARGUS, ArgusMyEntity::class)]
-class MyEntity extends Entity
+class MyEntity extends ValueObject
 {
-    // When lazy-loaded with ARGUS repo type, instantiates ArgusMyEntity
+    // properties...
 }
 ```
+
+### Side 2: Parent entity property -- `#[LazyLoad]` + `#[DatabaseColumn(ignoreProperty: true)]`
+
+The parent entity that owns this value object declares the lazy-loaded property:
+
+```php
+class ParentEntity extends Entity
+{
+    #[DatabaseColumn(ignoreProperty: true)]
+    #[LazyLoad(repoType: LazyLoadRepo::ARGUS)]
+    public ?MyEntity $myEntity;
+}
+```
+
+### Complete example (both sides)
+
+```php
+// Domain entity (value object) -- has #[LazyLoadRepo]
+#[LazyLoadRepo(LazyLoadRepo::ARGUS, ArgusSupportTicketAnalyzer::class)]
+class SupportTicketAnalyzer extends ValueObject
+{
+    public ?string $generatedTitle;
+    public ?string $generatedSummary;
+}
+
+// Parent entity -- has #[LazyLoad] on the property
+class SupportTicket extends Entity
+{
+    #[DatabaseColumn(ignoreProperty: true)]
+    #[LazyLoad(repoType: LazyLoadRepo::ARGUS)]
+    public ?SupportTicketAnalyzer $supportTicketAnalyzer;
+}
+
+// Argus repo -- extends domain entity
+class ArgusSupportTicketAnalyzer extends SupportTicketAnalyzer
+{
+    use ArgusTrait, ArgusAILanguageModelTrait;
+    // lazyload(), getUserContent(), applyLoadResult()
+}
+```
+
+Both `#[LazyLoadRepo]` on the value object AND `#[LazyLoad(repoType: LazyLoadRepo::ARGUS)]` on the parent property are required. If you forget `#[LazyLoadRepo]` on the value object, the framework cannot find the Argus repo class to instantiate.
 
 ## `#[ArgusLoad]` Attribute
 
@@ -185,11 +247,13 @@ use DDD\Presentation\Api\Batch\Base\Dtos\BatchReponseDto;   // Has $status, $res
 
 ## Checklist (New Argus Repo)
 
-- [ ] Class extends domain entity (not wraps)
+- [ ] Argus class name follows convention: `Argus` + exact domain entity name (no `Result`/`Response` suffix)
+- [ ] Argus class **extends** the domain entity (not wraps)
 - [ ] Uses `ArgusTrait`
 - [ ] Has `#[ArgusLoad(...)]` with endpoint, cache level, TTL
 - [ ] Implements `getLoadPayload()` returning array with `body`/`query`/`path`
 - [ ] Implements `handleLoadResponse()` calling `postProcessLoadResponse()` at end
 - [ ] `uniqueKey()` is deterministic (for cache key stability)
-- [ ] Domain entity has `#[LazyLoadRepo(LazyLoadRepo::ARGUS, ArgusMyEntity::class)]`
+- [ ] **Side 1:** Domain entity has `#[LazyLoadRepo(LazyLoadRepo::ARGUS, ArgusMyEntity::class)]` on its class
+- [ ] **Side 2:** Parent entity has `#[DatabaseColumn(ignoreProperty: true)]` + `#[LazyLoad(repoType: LazyLoadRepo::ARGUS)]` on the property
 - [ ] Never use `private` -- always `protected`
