@@ -6,6 +6,7 @@ namespace DDD\Domain\Base\Repo\Argus\Utils;
 
 use DDD\Domain\Base\Repo\Argus\Attributes\ArgusLoad;
 use DDD\Domain\Base\Repo\Argus\Enums\ArgusApiOperationType;
+use DDD\Infrastructure\Exceptions\InternalErrorException;
 use DDD\Infrastructure\Services\DDDService;
 use DDD\Infrastructure\Services\AuthService;
 use DDD\Domain\Base\Entities\MessageHandlers\AppMessageHandler;
@@ -397,10 +398,20 @@ class ArgusApiOperations
                     unset($parametersAndCallId['mergeindices']);
                     if (isset($parametersAndCallId['body'])) {
                         if (is_object($parametersAndCallId['body']) || is_array($parametersAndCallId['body'])) {
-                            $parametersAndCallId['body'] = json_encode(
+                            // JSON_INVALID_UTF8_SUBSTITUTE: payload content can contain invalid UTF-8 (e.g. a
+                            // truncated multibyte char from terminal input or a tool result) — without it
+                            // json_encode returns FALSE and the request silently goes out with body=false
+                            // (observed: an AI completion endpoint then returns empty responses in a loop).
+                            $encodedBody = json_encode(
                                 $parametersAndCallId['body'],
-                                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+                                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
                             );
+                            if ($encodedBody === false) {
+                                throw new InternalErrorException(
+                                    'Argus request body could not be JSON-encoded: ' . json_last_error_msg()
+                                );
+                            }
+                            $parametersAndCallId['body'] = $encodedBody;
                         }
                     }
                     $parametersAndCallId['timeout'] = $timeout;
