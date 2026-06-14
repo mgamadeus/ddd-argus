@@ -673,9 +673,17 @@ trait ArgusLoadTrait
                     $this->argusSettings->getCacheLevel()
                 );
             } else {
+                // Serialize the cache entry like ValueObjectTrait::mapToRepository() — a fresh,
+                // persistence-correct pass (ignoreHideAttributes: true, cached: false, forPersistence: true)
+                // rather than toJSON(true) (= toObject(cached: true, ...)). cached:true could reuse a
+                // serialization computed earlier in the same render while a display-hide was active, persisting
+                // a structurally-incomplete blob (missing the union objectType discriminator). cached:false
+                // forces a clean re-serialization. The json_encode flags match SerializerTrait::toJSON() so the
+                // cached string stays byte-compatible with the argusLoadFromCache() read path.
                 $serialized = $this->argusSettings->getSerializationMethod(
-                ) == ArgusLoad::SERIALIZATION_METHOD_TO_OBJECT ? $this->toJSON(
-                    true
+                ) == ArgusLoad::SERIALIZATION_METHOD_TO_OBJECT ? json_encode(
+                    $this->toObject(ignoreHideAttributes: true, cached: false, forPersistence: true),
+                    JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
                 ) : serialize($this);
                 //echo $this->cacheKey() . ' Set<br />';
                 ArgusCache::set(
