@@ -202,19 +202,100 @@ Each has a corresponding `get{Operation}Payload()` method to override.
 
 TTLs: `CACHE_TTL_TEN_MINUTES` (600), `CACHE_TTL_THIRTY_MINUTES` (1800), `CACHE_TTL_ONE_HOUR` (3600), `CACHE_TTL_ONE_DAY` (86400), `CACHE_TTL_ONE_WEEK` (604800), `CACHE_TTL_ONE_MONTH` (2292000)
 
-## Selective Property Loading
+## Selective & Recursive Loading — ONE `argusLoad()` cascades through a tree of child Argus repos
+
+An Argus repo can hold CHILD Argus entities/sets. A SINGLE `argusLoad()` on the parent loads the parent AND the
+**selected** children — recursively, in one batched/merged set of HTTP calls. `setPropertiesToLoad(...)` chooses WHICH
+children load; `addChildren(...)` wires a child into the tree so the cascade and `toEntity()` see it.
+
+### The shape (per-call selection)
 
 ```php
-// Per-call: load only specific children
-$argus->setPropertiesToLoad(ArgusChildEntity::class);
-$argus->setPropertiesToLoad(
-    ArgusLoadingParameters::create(ArgusOther::class, 'param1', 'param2')
-);
-$argus->argusLoad();
+$argus = new ArgusMyEntity();
+$argus->fromEntity($plainEntity);              // hydrate the Argus tree from a plain domain entity
 
-// Per-class: always load these children
-ArgusMyEntity::setPropertiesToLoadAlways(ArgusChildEntity::class);
+$argus->someChildren = new ArgusChildSet();    // attach a child Argus set/entity …
+$argus->addChildren($argus->someChildren);     // … and WIRE it into the tree (else it is invisible to load/convert)
+
+$argus->setPropertiesToLoad(                    // select which child Argus repos this call loads
+    ArgusChildEntity::class,
+    ArgusOtherChild::class,
+);
+$argus->argusLoad();                            // ONE call → parent + every selected child, merged
+
+$plainEntity = $argus->toEntity();              // convert the whole loaded tree back to plain entities
 ```
+
+### Per-class sticky selection
+
+```php
+ArgusMyEntity::setPropertiesToLoadAlways(ArgusChildEntity::class);   // every later (lazy) load of this CLASS pulls it
+```
+
+### Parameterized children — `ArgusLoadingParameters::create(Class, ...args)`
+
+When a child needs per-call constructor arguments (a search string, language, country, pagination cursor, date range),
+wrap it. Several differently-parameterized sources batch into one load:
+
+```php
+$toLoad = [];
+$toLoad[] = ArgusLoadingParameters::create(ArgusGooglePlaces::class, $searchInput, $languageCode, $countryCode, true);
+$toLoad[] = ArgusLoadingParameters::create(ArgusFacebookPages::class, $searchInput, $languageCode, $countryCode, false);
+$container->setPropertiesToLoad(...$toLoad);
+$container->argusLoad(autoloadCurrentObject: false);   // load ONLY the children, don't re-fetch the container itself
+```
+
+### Dynamic / variadic fan-out
+
+The class list can be computed at runtime and spread:
+
+```php
+$enabled = array_map(fn($e) => self::ENGINE_MAP[$e], $enabledEngines);   // e.g. one Argus class per AI engine
+$container->setPropertiesToLoad(...$enabled);
+$container->argusLoad(autoloadCurrentObject: false);
+```
+
+### Deep recursive trees — `setPropertiesToLoad` at MULTIPLE depths
+
+Configure selection at each level of the tree, graft freshly-`new`-ed children with `addChildren`, then ONE
+`argusLoad()` on the root fans the whole subtree out:
+
+```php
+$argusLocation->setPropertiesToLoad(ArgusLocationCompetitors::class);
+$argusReputation = $argusLocation->reputation;                 // a child Argus entity …
+$argusReputation->setPropertiesToLoad(ArgusReviews::class);    // … with its OWN selection
+$argusReputation->reviewsAnalysis = new ArgusReviewsAnalysis();
+$argusReputation->addChildren($argusReputation->reviewsAnalysis);
+$argusReputation->reviewsAnalysis->setPropertiesToLoad(ArgusReputationDimensions::class, ArgusReputationTopics::class);
+$argusLocation->argusLoad();                                    // one call → the entire multi-level subtree
+```
+
+### Two-phase / incremental — re-`argusLoad()` after growing the tree
+
+A first load can DISCOVER new children (e.g. domains found in the response); attach them, give each its own
+`setPropertiesToLoad`, and call `argusLoad()` again — it loads only the newly-added branches (already-loaded ones are
+skipped):
+
+```php
+$argus->setPropertiesToLoad(ArgusWebPageContent::class, ArgusGooglePlaces::class);
+$argus->argusLoad();                                  // first pass
+// … discover new domains in the result, attach them:
+$argus->addChildren($argus->webPages);
+$leaf->setPropertiesToLoad(ArgusWebPageContent::class);
+$argus->argusLoad();                                  // second pass — only the new branches load
+```
+
+### Rules
+
+- **`addChildren($child)` is mandatory** to make a child part of the load/convert tree — a child you set but don't
+  `addChildren()` is invisible.
+- **One `argusLoad()` recurses** — never loop `argusLoad()` per child. Re-call it ONLY to load newly-attached children.
+- **`autoloadCurrentObject: false`** loads just the selected children, without re-fetching the parent/container itself
+  (use when the container is a search/aggregation node you already hold).
+- **`fromEntity()` in, `toEntity()` out** — the Argus repo is the loader; per-call parameters on children are set on the
+  Argus child BEFORE the load; the plain entity tree is the result.
+- For AI children, set the budget owner (`ArgusChild::setDefaultAccountOrLocationForAiBudgetHandling(...)`) before the
+  load. Cache-bypass per call via `argusLoad(useArgusEntityCache: false, useApiACallCache: false)`.
 
 ## Response Parsing Helper
 
