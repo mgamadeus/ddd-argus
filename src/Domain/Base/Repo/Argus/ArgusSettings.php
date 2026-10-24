@@ -55,7 +55,7 @@ class ArgusSettings
     public ?ArgusApiCacheOperations $cacheOperations;
 
     public function __construct(
-        ArgusLoad $argusLoad = null,
+        ?ArgusLoad $argusLoad = null,
     ) {
         $this->argusLoad = $argusLoad;
     }
