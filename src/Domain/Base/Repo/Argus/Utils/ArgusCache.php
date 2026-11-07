@@ -23,6 +23,9 @@ class ArgusCache
     public const int CACHE_TTL_TEN_MINUTES = 600;
     public const int CACHE_TTL_ONE_WEEK = 604800;
     public const int CACHE_TTL_ONE_MONTH = 2292000;
+
+    /** @var int The longest an unsuccessful load's empty entry is cached ({@see \DDD\Domain\Base\Repo\Argus\Traits\ArgusLoadTrait::postProcessLoadResponse()}) */
+    public const int FAILED_LOAD_CACHE_TTL_MAX = self::CACHE_TTL_ONE_HOUR;
     protected static $defaultCachePrefix = 'ArgusCache_';
 
     /**

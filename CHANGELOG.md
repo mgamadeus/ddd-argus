@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.1
+
+- Fix: since 1.3.0 passes the TTL to the cache, the empty entry of a failed load (`postProcessLoadResponse($data, false)`)
+  lived as long as a successful answer — a failed geocode stuck for the day or month the class caches. An empty entry
+  now lives at most `ArgusCache::FAILED_LOAD_CACHE_TTL_MAX` (one hour, the effective lifetime before 1.3.0). Transport
+  failures that must not be cached at all still pass `cacheFailure: false`.
+- Note for installations without a Redis Sentinel cache group: that group falls back to APCu, so since 1.3.0 a
+  successful answer stays in APCu for the class's full `cacheTtl` (a month for `CACHE_TTL_ONE_MONTH`), per host.
+
 ## 1.3.0
 
 Requires `mgamadeus/ddd` ^3.14.3.

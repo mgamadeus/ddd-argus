@@ -11,6 +11,7 @@ use DDD\Infrastructure\Cache\Cache;
 use DDD\Tests\Argus\Support\ArgusCachedProbe;
 use DDD\Tests\Argus\Support\ArgusConfigOverride;
 use DDD\Tests\Argus\Support\ArgusEnvelopeProbe;
+use DDD\Tests\Argus\Support\ArgusLongCachedProbe;
 use DDD\Tests\Argus\Support\ArgusTimeoutFromAttributeProbe;
 use DDD\Tests\Argus\Support\ArgusTimeoutFromConstantProbe;
 use DDD\Tests\Argus\Support\InMemoryRecordingCache;
@@ -95,6 +96,21 @@ class ArgusLoadTraitTest extends TestCase
         $cacheKey = ArgusCache::getCacheKey($argusCachedProbe->cacheKey());
         self::assertArrayNotHasKey($cacheKey, $this->recordingCaches[Cache::CACHE_GROUP_APC]->valuesByKey);
         self::assertArrayNotHasKey($cacheKey, $this->recordingCaches[Cache::CACHE_GROUP_REDIS_SENTINEL]->valuesByKey);
+    }
+
+    public function testAFailedLoadCachedAsEmptyLivesAtMostAnHour(): void
+    {
+        ArgusApiOperations::$transportRecording = ArgusTransportRecording::forRecording(
+            new MockHandler([new Response(502, [], '{"message":"bad gateway"}')])
+        );
+        $argusLongCachedProbe = new ArgusLongCachedProbe();
+        $argusLongCachedProbe->probeKey = 'failed';
+
+        $argusLongCachedProbe->argusLoad();
+
+        $cacheKey = ArgusCache::getCacheKey($argusLongCachedProbe->cacheKey());
+        self::assertSame('', $this->recordingCaches[Cache::CACHE_GROUP_REDIS_SENTINEL]->valuesByKey[$cacheKey]);
+        self::assertSame(ArgusCache::FAILED_LOAD_CACHE_TTL_MAX, $this->recordingCaches[Cache::CACHE_GROUP_REDIS_SENTINEL]->ttlsByKey[$cacheKey]);
     }
 
     public function testTheNon2xxReasonNamesTheStatusAndTheUpstreamMessage(): void

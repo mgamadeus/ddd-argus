@@ -814,10 +814,12 @@ trait ArgusLoadTrait
         $this->argusSettings->isLoadedSuccessfully = $successfull;
         if ($this->argusSettings->isCachable() && !$this->argusSettings->loadedFromCache) {
             if (!$successfull && $cacheFailure) {
+                // the empty entry of a failed load lives at most an hour, however long the class caches its answers:
+                // a failure must not stick for the day or month a successful answer is kept
                 ArgusCache::set(
                     $this->cacheKey(),
                     '',
-                    $this->argusSettings->getCacheTTL(),
+                    min($this->argusSettings->getCacheTTL(), ArgusCache::FAILED_LOAD_CACHE_TTL_MAX),
                     $this->argusSettings->getCacheLevel()
                 );
             } elseif ($successfull) {
