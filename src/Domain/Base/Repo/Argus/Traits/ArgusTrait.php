@@ -252,9 +252,20 @@ trait ArgusTrait
     {
         $responseObject = null;
         if (isset($callResponseData->status, $callResponseData->data)
-            && ($callResponseData->status === 200 || $callResponseData->status === 'OK')
+            && ($callResponseData->status === 200 || $callResponseData->status === 'OK' || $callResponseData->status === 'result')
         ) {
             $responseObject = $callResponseData->data;
+        } elseif (is_object($callResponseData)
+            && (
+                ($callResponseData->object ?? null) === 'response'
+                || isset($callResponseData->output)
+                || isset($callResponseData->output_text)
+                || isset($callResponseData->choices)
+            )
+        ) {
+            // an LLM endpoint answering with the vendor payload itself, without the status/data envelope: an OpenAI
+            // Responses payload (object "response", output, output_text) or a Chat Completions payload (choices)
+            $responseObject = $callResponseData;
         }
         return $responseObject;
     }

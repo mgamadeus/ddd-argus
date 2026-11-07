@@ -1,9 +1,9 @@
 ---
 name: ddd-module-argus-specialist
-description: Create and work with Argus external API repositories in the ddd-argus module -- batched HTTP calls, multi-tier caching, CRUD operations, bidirectional entity conversion, and selective property loading. Use when integrating external APIs via the Argus pattern.
+description: "Create and work with Argus external API repositories in the ddd-argus module: batched HTTP calls, multi-tier caching, CRUD, entity conversion, selective and recursive loading. Covers the ArgusLoad attribute, Base.Repo.argus config (baseUrl, requestSettings, auth bearer switch, appendDebugFlags, trackingHeader; env fallback), header order (call headers win), METHOD-prefixed endpoints (others rejected before sending), timeouts (attribute, DEFAULT_ARGUS_TIMEOUT), cache TTLs, settle mode, per-operation status and headers, keeping non-2xx answers out of the cache, response envelopes (OpenAI Responses, Chat Completions), private transport, split execution (send, advance, receive), call journal, ArgusCacheInFlightComputation, ArgusTransportRecording, the worker reset. Use when integrating an external API via Argus, configuring its base URL or headers, a load hangs without timeout, a failed answer got cached, one failed call fails the batch, or recording and replaying Argus calls."
 metadata:
   author: mgamadeus
-  version: "1.0.0"
+  version: "1.3.0"
   module: mgamadeus/ddd-argus
 ---
 
@@ -71,6 +71,24 @@ class ArgusMyEntity extends MyEntity
 - Use `ArgusTrait` (provides `fromEntity()`, `toEntity()`, `cacheKey()`, `getResponseDataFromArgusResponse()`)
 - `uniqueKey()` must be deterministic for cache stability
 - Always call `$this->postProcessLoadResponse($callResponseData, $success)` at the end of `handleLoadResponse()`
+
+## Configuration
+
+`config/app/Base/Repo/argus.php` (`Base.Repo.argus`) first, the environment only where the config has no value:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `microservices.baseUrl` | base URL of relative endpoints | env `ARGUS_API_ENDPOINT` |
+| `requestSettings` | request options (`headers`, …), merged over the built-in defaults | env `ARGUS_REQUEST_SETTINGS` (JSON) |
+| `auth` | bearer token of `CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS` on calls without own `Authorization` | `true` |
+| `appendDebugFlags` | `debug=1&errors_as_json=1` on every URL | env `APP_DEBUG` |
+| `trackingHeader` | header with account id, request uid, call stack; `''` sends none | `rc-tracking` |
+
+- **Header order:** configured headers first, the payload's `headers` over them — a call's own `Content-Type`,
+  `x-api-key`, `Authorization`, `Accept-Language` win.
+- **Every endpoint carries its request method** (`GET:/path`, `POST:https://api.example.test/v1`). An endpoint without
+  one throws `InvalidArgumentException` before ANY request of the batch is sent.
+- With `auth: false` no `Authorization` reaches any endpoint (third-party URLs included) unless the call sets one.
 
 ## Naming Convention
 
@@ -191,6 +209,34 @@ $argus->argusSynchronize();   // Calls synchronizeEndpoint
 
 Each has a corresponding `get{Operation}Payload()` method to override.
 
+## Timeouts, failures, status
+
+- **Timeout:** `#[ArgusLoad(timeout: 30)]` reaches the HTTP client. Without it a class constant
+  `public const int DEFAULT_ARGUS_TIMEOUT = 300;` on the repo class or a trait it uses applies; without both the
+  timeout is 0 = wait forever. Every instance works on its own copy of the attribute (changing
+  `getArgusSettings()->argusLoad` on one instance does not change others).
+- **Per operation:** `$apiOperation->responseStatusCode`, `->responseHeaders`, `->rejectionReason` in
+  `handleLoadResponse()`.
+- **Settle mode:** `$this->getArgusSettings()->keepFulfilledCallsWhenOneIsRejected = true` — a call rejected at the
+  transport level (timeout, connection, DNS) answers null with its `rejectionReason`; the other calls are handled.
+  Default: the first rejected call throws out of the whole load.
+- **A failed answer is not cached** when the handler says so:
+
+```php
+public function handleLoadResponse(mixed &$callResponseData = null, ?ArgusApiOperation &$apiOperation = null): void
+{
+    if ($callResponseData === null || static::rejectionReasonForNon2xxAnswer($callResponseData, $apiOperation) !== null) {
+        $this->postProcessLoadResponse($callResponseData, false, cacheFailure: false);   // next load asks again
+        return;
+    }
+    // … map the answer …
+    $this->postProcessLoadResponse($callResponseData, true);
+}
+```
+
+`postProcessLoadResponse($data, false)` (default `cacheFailure: true`) caches an empty entry for the TTL — right for
+"the API says there is nothing", wrong for a transport failure.
+
 ## Cache Levels & TTLs
 
 | Level | Constant | Behavior |
@@ -200,7 +246,7 @@ Each has a corresponding `get{Operation}Payload()` method to override.
 | 2 | `CACHELEVEL_DB` | Redis Sentinel only (distributed) |
 | 3 | `CACHELEVEL_MEMORY_AND_DB` | Both (recommended) |
 
-TTLs: `CACHE_TTL_TEN_MINUTES` (600), `CACHE_TTL_THIRTY_MINUTES` (1800), `CACHE_TTL_ONE_HOUR` (3600), `CACHE_TTL_ONE_DAY` (86400), `CACHE_TTL_ONE_WEEK` (604800), `CACHE_TTL_ONE_MONTH` (2292000)
+TTLs (passed to both levels; APC capped at one hour): `CACHE_TTL_TEN_MINUTES` (600), `CACHE_TTL_FIFTEEN_MINUTES` (900), `CACHE_TTL_THIRTY_MINUTES` (1800), `CACHE_TTL_ONE_HOUR` (3600), `CACHE_TTL_ONE_DAY` (86400), `CACHE_TTL_ONE_WEEK` (604800), `CACHE_TTL_ONE_MONTH` (2292000)
 
 ## Selective & Recursive Loading — ONE `argusLoad()` cascades through a tree of child Argus repos
 
@@ -300,9 +346,10 @@ $argus->argusLoad();                                  // second pass — only th
 ## Response Parsing Helper
 
 ```php
-// Standard Argus response: { "status": 200, "data": { ... } }
+// Envelope { "status": 200 | "OK" | "result", "data": { ... } } → data
+// An OpenAI Responses payload (object "response", output, output_text) or a Chat Completions payload (choices)
+// is returned as it is; anything else → null
 $data = $this->getResponseDataFromArgusResponse($callResponseData);
-// Returns $callResponseData->data if status is 200 or 'OK', null otherwise
 ```
 
 ## Debugging
@@ -316,6 +363,52 @@ $argus->argusLoad(displayResponse: true);  // Echo response, don't execute
 
 $calls = ArgusApiOperations::getExecutedArgusCalls();  // Retrieve log
 ```
+
+## Advanced execution
+
+**Private transport** — for answers that must not be logged or followed (capabilities, image bytes):
+
+```php
+return [
+    'query' => [...],
+    ArgusApiOperation::PRIVATE_TRANSPORT => ['response' => 'binary', 'max_response_bytes' => 2_000_000], // or 'json'
+];
+// binary answers arrive as ['body' => $bytes]; no redirects, bounded streamed read (error bodies too), never logged,
+// cannot be merged, endpoint must carry its method
+```
+
+**Split execution** — send, do own work while the answers travel, receive:
+
+```php
+if ($argus->sendArgusLoadRequests()) {          // false: the load already ran blocking (several rounds, recorded run)
+    // … own work; $argus->advanceArgusLoadRequests() between steps moves the transfers …
+    $argus->receiveArgusLoadResponses(hrtime(true) + 5e9);   // optional deadline: pending calls are cancelled
+}
+```
+
+**Call journal** — `ArgusApiOperations::$journalRequests = true;` for a span, then
+`ArgusApiOperations::getCallJournal()` (`ArgusSentCallJournalEntries`: endpoint, `transferMilliseconds`, `statusCode`,
+start/end) and `clearCallJournal()`. `getSentCallCountsByEndpoint()` counts every sent call of the process.
+
+**Joining a running computation** — `ArgusCacheInFlightComputation($argusEntity->cacheKey())`:
+`joinPendingComputationOrClaim()` returns false when the entry exists or appeared while another process computed it
+(load with cache), true when the caller computes — release in `finally` with `releaseComputation()`.
+
+**Recorded runs** — `ArgusApiOperations::$transportRecording = ArgusTransportRecording::forRecording();` records every
+call (`toStorageArray()` to store); `forPlaying($stored)`, `forPlayingToolCalls()`, `forPlayingWithLiveTools()` answer
+from it (`unusedEntries()`, `buildChangedRequestBodies()`, `playedRequests`). `RecordedRunIdCounterparts` maps replay
+ids to recorded ids. Calls are matched by kind: an Argus class may declare `public function getArgusCallKind(): ?string`.
+
+**Optional entity methods** (read by the executor when present — declare them on the class, not in a trait that is
+combined with `ArgusTrait`, or the two traits collide): `getArgusCallKind(): ?string`,
+`buildTransferStallCurlOptions(): array` (cURL low-speed abort, e.g. `[CURLOPT_LOW_SPEED_LIMIT => 1,
+CURLOPT_LOW_SPEED_TIME => 30]`, applied to unmerged calls).
+
+**The executor is per batch:** `new ArgusApiOperations()` — never a container service, never cached.
+
+**Worker reset:** `ArgusWorkerStateResetter` runs before every message a Messenger worker consumes (and as
+`kernel.reset`): executor statics, `ArgusLoad::$logArgusCalls`, every class's `setPropertiesToLoadAlways()` selection.
+Nothing to wire; an app resets only its own repo statics.
 
 ## Batch DTOs
 
@@ -337,4 +430,7 @@ use DDD\Presentation\Api\Batch\Base\Dtos\BatchReponseDto;   // Has $status, $res
 - [ ] `uniqueKey()` is deterministic (for cache key stability)
 - [ ] **Side 1:** Domain entity has `#[LazyLoadRepo(LazyLoadRepo::ARGUS, ArgusMyEntity::class)]` on its class
 - [ ] **Side 2:** Parent entity has `#[DatabaseColumn(ignoreProperty: true)]` + `#[LazyLoad(repoType: LazyLoadRepo::ARGUS)]` on the property
+- [ ] Endpoint carries its request method (`GET:` / `POST:` / …)
+- [ ] Timeout set (attribute or `DEFAULT_ARGUS_TIMEOUT`) for anything that can hang
+- [ ] Transport failures / non-2xx answers end with `postProcessLoadResponse(..., false, cacheFailure: false)`
 - [ ] Never use `private` -- always `protected`

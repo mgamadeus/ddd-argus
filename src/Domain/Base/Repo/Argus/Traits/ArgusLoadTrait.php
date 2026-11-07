@@ -46,6 +46,16 @@ trait ArgusLoadTrait
     protected static array $propertiesToLoadAlways = [];
 
     /**
+     * A new worker job starts without the per-class "load these children always" selection a previous job set through
+     * {@see self::setPropertiesToLoadAlways()}. Trait static: every class that USES the trait holds its own copy, so
+     * the worker reset ({@see \DDD\Symfony\EventListeners\ArgusWorkerStateResetter}) runs this on each of them.
+     */
+    public static function resetPropertiesToLoadAlwaysForNewJob(): void
+    {
+        self::$propertiesToLoadAlways = [];
+    }
+
+    /**
      * creates ArgusLoad attribute instance
      * @return void
      */
@@ -63,10 +73,17 @@ trait ArgusLoadTrait
         /** @var ArgusLoad $argusLoadInstance */
         $argusLoadInstance = self::getAttributeInstance(ArgusLoad::class);
         if ($argusLoadInstance) {
-            $this->argusSettings = new ArgusSettings($argusLoadInstance);
+            // a COPY: the attribute instance is cached per class, so a repo that changes its own endpoint or timeout
+            // would otherwise change it for every later instance of the class in this process
+            $this->argusSettings = new ArgusSettings(clone $argusLoadInstance);
         }
         else {
             $this->argusSettings = new ArgusSettings(new ArgusLoad());
+        }
+        // a repo class (or a trait it uses) can declare a DEFAULT_ARGUS_TIMEOUT constant as its fallback timeout in
+        // seconds; a non-zero `timeout:` on #[ArgusLoad] wins; without either the timeout stays 0 = wait forever
+        if (!$this->argusSettings->timeout && defined(static::class . '::DEFAULT_ARGUS_TIMEOUT')) {
+            $this->argusSettings->timeout = (float)constant(static::class . '::DEFAULT_ARGUS_TIMEOUT');
         }
         return $this->argusSettings;
     }
@@ -82,6 +99,7 @@ trait ArgusLoadTrait
      * @param int|null $apiCallCacheLifetime the lifetime of the simple API call cache
      * @return void
      * @throws InternalErrorException
+     * @throws \InvalidArgumentException an endpoint without request method (nothing of the batch is sent)
      */
     public function argusLoad(
         bool $useArgusEntityCache = true,
@@ -111,13 +129,113 @@ trait ArgusLoadTrait
                     true,
                     ArgusApiOperationType::LOAD,
                     $this->argusSettings?->timeout ?? 0,
+                    $this->argusSettings?->keepFulfilledCallsWhenOneIsRejected ?? false,
                 );
-            } catch (InternalErrorException $e) {
+            } catch (InternalErrorException|\InvalidArgumentException $e) {
                 //if execution fails, clean static properties and then throw the error further
                 $this->argusSettings->resetOperations();
                 throw $e;
             }
         }
+        $this->completeArgusLoad();
+    }
+
+    /**
+     * {@see argusLoad()} in two halves, for a caller that has work of its own while the answers travel: this half
+     * prepares the load (the caches included) and SENDS its calls; {@see advanceArgusLoadRequests()} moves them forward
+     * between the caller's steps and {@see receiveArgusLoadResponses()} waits for the answers and completes the load.
+     * Returns false when the load ran to its end here already — the execution cannot be split (more than one call
+     * round, a recorded run): then nothing is to be received. That load runs under `$blockingLoadTimeoutSeconds` when
+     * given (a caller whose split timeout is longer than its own deadline), else under the settings' timeout.
+     *
+     * @throws InternalErrorException
+     * @throws \InvalidArgumentException an endpoint without request method (nothing of the batch is sent)
+     */
+    public function sendArgusLoadRequests(
+        bool $useArgusEntityCache = true,
+        bool $useApiACallCache = true,
+        bool $autoloadCurrentObject = true,
+        ?float $blockingLoadTimeoutSeconds = null
+    ): bool {
+        if (ArgusLoad::$deactivateArgusCache) {
+            $useArgusEntityCache = false;
+            $useApiACallCache = false;
+        }
+        if (isset(static::$propertiesToLoadAlways[static::class])) {
+            $this->setPropertiesToLoad(...static::$propertiesToLoadAlways[static::class]);
+        }
+        $this->argusSettings->loadingPrepared = false;
+        $this->argusSettings->isLoaded = false;
+        $this->argusSettings->resetOperations();
+        $this->argusPrepareLoad($useArgusEntityCache, $autoloadCurrentObject);
+        if ($this->argusSettings->apiOperations) {
+            try {
+                if ($this->argusSettings->apiOperations->sendExecution(
+                    ArgusApiOperationType::LOAD,
+                    $this->argusSettings?->timeout ?? 0,
+                    $this->argusSettings?->keepFulfilledCallsWhenOneIsRejected ?? false,
+                )) {
+                    return true;
+                }
+                $this->argusSettings->apiOperations->execute(
+                    false,
+                    false,
+                    $useApiACallCache,
+                    true,
+                    ArgusApiOperationType::LOAD,
+                    $blockingLoadTimeoutSeconds ?? $this->argusSettings?->timeout ?? 0,
+                    $this->argusSettings?->keepFulfilledCallsWhenOneIsRejected ?? false,
+                );
+            } catch (InternalErrorException|\InvalidArgumentException $e) {
+                $this->argusSettings->resetOperations();
+                throw $e;
+            }
+        }
+        $this->completeArgusLoad();
+        return false;
+    }
+
+    /** Move the calls of {@see sendArgusLoadRequests()} forward without waiting for them */
+    public function advanceArgusLoadRequests(): void
+    {
+        $this->argusSettings->apiOperations?->advanceExecution();
+    }
+
+    /**
+     * Move the calls of {@see sendArgusLoadRequests()} forward until their requests are fully written, or at most
+     * `$maxSeconds`; returns whether they are.
+     */
+    public function advanceArgusLoadRequestsUntilWritten(float $maxSeconds): bool
+    {
+        return $this->argusSettings->apiOperations?->advanceExecutionUntilRequestsWritten($maxSeconds) ?? false;
+    }
+
+    /** When the last request of {@see sendArgusLoadRequests()} was written; null while one is not written yet */
+    public function findArgusLoadRequestsWrittenAtHr(): int|float|null
+    {
+        return $this->argusSettings->apiOperations?->findRequestsWrittenAtHr();
+    }
+
+    /**
+     * Wait for the answers of {@see sendArgusLoadRequests()} (only after it returned true) and complete the load exactly
+     * as {@see argusLoad()} does. With `$deadlineHr` (an hrtime) the calls still pending then are cancelled.
+     *
+     * @throws InternalErrorException
+     */
+    public function receiveArgusLoadResponses(int|float|null $deadlineHr = null): void
+    {
+        try {
+            $this->argusSettings->apiOperations?->receiveExecution($deadlineHr);
+        } catch (InternalErrorException $e) {
+            $this->argusSettings->resetOperations();
+            throw $e;
+        }
+        $this->completeArgusLoad();
+    }
+
+    /** The end of every load: the operations are dropped, a load without an endpoint of its own gets its callback */
+    protected function completeArgusLoad(): void
+    {
         $this->argusSettings->resetOperations();
         // in special cases, like Domain, no basis properties have to be loaded, just children. in this case we set it as
         // loaded and call the callback function, otherwise e.g. db caching would not be executed
@@ -126,7 +244,6 @@ trait ArgusLoadTrait
             $this->handleLoadResponse();
         }
         $this->argusSettings->resetOperations();
-        return;
     }
 
     /**
@@ -648,15 +765,46 @@ trait ArgusLoadTrait
     }
 
     /**
+     * Why a FULFILLED answer is a failure of the upstream call rather than an empty result: its HTTP status (the
+     * recorded {@see ArgusApiOperation::$responseStatusCode}, else the envelope's numeric `status`) is not 2xx. Null for
+     * a 2xx answer or when no status is known. A handler passes `cacheFailure: false` to
+     * {@see postProcessLoadResponse()} for such an answer, so it is not cached as empty:
+     *
+     * ```php
+     * if (static::rejectionReasonForNon2xxAnswer($callResponseData, $apiOperation) !== null) {
+     *     $this->postProcessLoadResponse($callResponseData, false, cacheFailure: false);
+     *     return;
+     * }
+     * ```
+     */
+    public static function rejectionReasonForNon2xxAnswer(mixed $callResponseData, ?ArgusApiOperation $apiOperation): ?string
+    {
+        $statusCode = $apiOperation?->responseStatusCode;
+        if ($statusCode === null && is_object($callResponseData) && isset($callResponseData->status) && is_numeric($callResponseData->status)) {
+            $statusCode = (int)$callResponseData->status;
+        }
+        if ($statusCode === null || ($statusCode >= 200 && $statusCode < 300)) {
+            return null;
+        }
+        $upstreamMessage = is_object($callResponseData)
+            ? trim((string)($callResponseData->message ?? $callResponseData->error ?? ''))
+            : '';
+        return 'http ' . $statusCode . ' from the upstream call' . ($upstreamMessage !== '' ? ': ' . mb_substr($upstreamMessage, 0, 160) : '');
+    }
+
+    /**
      * Is to be called AFTER individual handleLoadResponse implementation
      * handles aspects as setting then object loaded and caching
      * @param mixed|null $callResponseData response data data
      * @param bool $successfull loading was successful
+     * @param bool $cacheFailure false for a TRANSPORT failure (a rejected call, a non-2xx answer — see
+     *        {@see rejectionReasonForNon2xxAnswer()}): it is not cached as an empty entry, the next load asks again
      * @return void
      */
     protected function postProcessLoadResponse(
         mixed &$callResponseData = null,
-        bool $successfull = true
+        bool $successfull = true,
+        bool $cacheFailure = true
     ) {
         if ($this->parent && method_exists($this->parent, 'incLoadedChildren')) {
             $this->parent->incLoadedChildren();
@@ -665,14 +813,14 @@ trait ArgusLoadTrait
         $this->argusSettings->toBeLoaded = false;
         $this->argusSettings->isLoadedSuccessfully = $successfull;
         if ($this->argusSettings->isCachable() && !$this->argusSettings->loadedFromCache) {
-            if (!$successfull) {
+            if (!$successfull && $cacheFailure) {
                 ArgusCache::set(
                     $this->cacheKey(),
                     '',
                     $this->argusSettings->getCacheTTL(),
                     $this->argusSettings->getCacheLevel()
                 );
-            } else {
+            } elseif ($successfull) {
                 // Serialize the cache entry like ValueObjectTrait::mapToRepository() — a fresh,
                 // persistence-correct pass (ignoreHideAttributes: true, cached: false, forPersistence: true)
                 // rather than toJSON(true) (= toObject(cached: true, ...)). cached:true could reuse a
@@ -680,18 +828,26 @@ trait ArgusLoadTrait
                 // a structurally-incomplete blob (missing the union objectType discriminator). cached:false
                 // forces a clean re-serialization. The json_encode flags match SerializerTrait::toJSON() so the
                 // cached string stays byte-compatible with the argusLoadFromCache() read path.
+                // JSON_INVALID_UTF8_SUBSTITUTE: one invalid byte in a third-party payload must not drop the whole
+                // entry; a failure is logged instead of swallowed.
                 $serialized = $this->argusSettings->getSerializationMethod(
                 ) == ArgusLoad::SERIALIZATION_METHOD_TO_OBJECT ? json_encode(
                     $this->toObject(ignoreHideAttributes: true, cached: false, forPersistence: true),
-                    JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+                    JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
                 ) : serialize($this);
-                //echo $this->cacheKey() . ' Set<br />';
-                ArgusCache::set(
-                    $this->cacheKey(),
-                    $serialized,
-                    $this->argusSettings->getCacheTTL(),
-                    $this->argusSettings->getCacheLevel()
-                );
+                if ($serialized === false) {
+                    error_log(
+                        'ArgusLoadTrait: cache entry not written for ' . static::class . ' (' . $this->cacheKey()
+                        . '): json_encode failed — ' . json_last_error_msg()
+                    );
+                } else {
+                    ArgusCache::set(
+                        $this->cacheKey(),
+                        $serialized,
+                        $this->argusSettings->getCacheTTL(),
+                        $this->argusSettings->getCacheLevel()
+                    );
+                }
             }
         }
         $this->postProcessObjectAfterLoading();

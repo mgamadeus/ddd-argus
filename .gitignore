@@ -57,4 +57,4 @@
 
 .idea
 
-composer.lock
+composer.lock.phpunit.cache

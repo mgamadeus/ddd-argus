@@ -19,8 +19,8 @@ class ArgusLoad
 {
     use SerializerTrait, BaseAttributeTrait;
 
-    public const SERIALIZATION_METHOD_SERIALIZE = 'serialize';
-    public const SERIALIZATION_METHOD_TO_OBJECT = 'toObject';
+    public const string SERIALIZATION_METHOD_SERIALIZE = 'serialize';
+    public const string SERIALIZATION_METHOD_TO_OBJECT = 'toObject';
 
 
     /** @var bool If set to true, all caching is globally deactivated, ignoring individual parameters passed on load() calls */

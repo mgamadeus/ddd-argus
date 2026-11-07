@@ -6,6 +6,7 @@ namespace DDD\Domain\Base\Repo\Argus;
 
 use DDD\Domain\Base\Repo\Argus\Attributes\ArgusLoad;
 use DDD\Domain\Base\Repo\Argus\Utils\ArgusApiCacheOperations;
+use DDD\Domain\Base\Repo\Argus\Utils\ArgusApiOperation;
 use DDD\Domain\Base\Repo\Argus\Utils\ArgusApiOperations;
 use DDD\Domain\Base\Repo\Argus\Utils\ArgusCache;
 use DDD\Infrastructure\Traits\Serializer\SerializerTrait;
@@ -48,16 +49,26 @@ class ArgusSettings
     /** @var float The time after the load times out */
     public float $timeout = 0;
 
+    /**
+     * @var bool Settle mode (opt-in, default off): a call of the batch that is REJECTED at the transport level (a
+     * timeout, a connection or DNS error) does not throw out of the whole load — the rejected operation gets a null
+     * result and its reason ({@see ArgusApiOperation::$rejectionReason}), so its handler runs and classifies it, while
+     * the fulfilled calls are handled as usual
+     */
+    public bool $keepFulfilledCallsWhenOneIsRejected = false;
+
     /** @var ArgusApiOperations|null Api operations object storing all Argus call operations and loading logic */
     public ?ArgusApiOperations $apiOperations;
 
-    /** @var ArgusApiOperations|null Api cache operations object storing all Argus cache call operations and loading logic */
+    /** @var ArgusApiCacheOperations|null Api cache operations object storing all Argus cache call operations and loading logic */
     public ?ArgusApiCacheOperations $cacheOperations;
 
     public function __construct(
         ?ArgusLoad $argusLoad = null,
     ) {
         $this->argusLoad = $argusLoad;
+        // the attribute's timeout reaches the HTTP client: the operations read $this->timeout
+        $this->timeout = $argusLoad->timeout ?? 0;
     }
 
     /**

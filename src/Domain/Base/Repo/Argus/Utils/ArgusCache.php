@@ -12,16 +12,17 @@ use DDD\Infrastructure\Cache\Cache as InfrastructureCache;
  */
 class ArgusCache
 {
-    public const CACHELEVEL_MEMORY_AND_DB = 3;
-    public const CACHELEVEL_MEMORY = 1; //api_objects may be cached in both
-    public const CACHELEVEL_DB = 2; //calls are cached only in memory
-    public const CACHELEVEL_NONE = 0;
-    public const CACHE_TTL_ONE_DAY = 86400;
-    public const CACHE_TTL_ONE_HOUR = 3600;
-    public const CACHE_TTL_THIRTY_MINUTES = 1800;
-    public const CACHE_TTL_TEN_MINUTES = 600;
-    public const CACHE_TTL_ONE_WEEK = 604800;
-    public const CACHE_TTL_ONE_MONTH = 2292000;
+    public const int CACHELEVEL_MEMORY_AND_DB = 3;
+    public const int CACHELEVEL_MEMORY = 1; //api_objects may be cached in both
+    public const int CACHELEVEL_DB = 2; //calls are cached only in memory
+    public const int CACHELEVEL_NONE = 0;
+    public const int CACHE_TTL_ONE_DAY = 86400;
+    public const int CACHE_TTL_ONE_HOUR = 3600;
+    public const int CACHE_TTL_THIRTY_MINUTES = 1800;
+    public const int CACHE_TTL_FIFTEEN_MINUTES = 900;
+    public const int CACHE_TTL_TEN_MINUTES = 600;
+    public const int CACHE_TTL_ONE_WEEK = 604800;
+    public const int CACHE_TTL_ONE_MONTH = 2292000;
     protected static $defaultCachePrefix = 'ArgusCache_';
 
     /**
@@ -120,16 +121,19 @@ class ArgusCache
             if ($apcTTL > self::CACHE_TTL_ONE_HOUR) {
                 $apcTTL = self::CACHE_TTL_ONE_HOUR;
             }
+            // the entry's TTL reaches the cache: without it every entry lived the cache group's default lifetime
             InfrastructureCache::instance(InfrastructureCache::CACHE_GROUP_APC)->set(
                 self::getCacheKey($cacheKey),
-                $data
+                $data,
+                $apcTTL !== null ? (int)$apcTTL : null
             );
         }
 
         if ($cacheLevel == self::CACHELEVEL_DB || $cacheLevel == self::CACHELEVEL_MEMORY_AND_DB) {
             InfrastructureCache::instance(InfrastructureCache::CACHE_GROUP_REDIS_SENTINEL)->set(
                 self::getCacheKey($cacheKey),
-                $data
+                $data,
+                $ttl !== null ? (int)$ttl : null
             );
             return;
         }

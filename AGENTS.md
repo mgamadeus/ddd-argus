@@ -2,9 +2,9 @@
 
 External API repository layer for the `mgamadeus/ddd` framework -- batched HTTP calls with multi-tier caching.
 
-**Package:** `mgamadeus/ddd-argus` (v1.0.x)
+**Package:** `mgamadeus/ddd-argus` (v1.3.x)
 **Namespace:** `DDD\`
-**Depends on:** `mgamadeus/ddd` (^2.10)
+**Depends on:** `mgamadeus/ddd` (^3.14.3)
 
 > **This module follows all DDD Core conventions.** For base patterns, see `vendor/mgamadeus/ddd/AGENTS.md` and skills in `vendor/mgamadeus/ddd`.
 
@@ -23,7 +23,15 @@ src/
 |   +-- Utils/
 |       +-- ArgusCache.php               [Multi-tier cache: APC + Redis Sentinel]
 |       +-- ArgusApiOperation.php         [Single API call with path param substitution]
-|       +-- ArgusApiOperations.php        [Batch executor: parallel Guzzle, merging, auth]
+|       +-- ArgusApiOperations.php        [Batch executor: parallel Guzzle, merging, auth, split execution, call journal]
+|       +-- ArgusApiCallsInFlight.php     [Calls sent and not yet received (split execution)]
+|       +-- ArgusApiCallRequestWriteProgress.php [Whether a sent request is fully written]
+|       +-- ArgusSentCallJournalEntry(ies).php   [Call journal: endpoint, transfer time, status]
+|       +-- ArgusCacheInFlightComputation.php    [A second reader joins a running computation]
+|       +-- ArgusCachePendingMarker.php   [Its pending marker]
+|       +-- ArgusTransportRecording.php   [Record / play every Argus call of a process]
+|       +-- ArgusTransportRecordingEntry(ies).php, ArgusTransportRecordingPlayedRequest(s).php, ArgusTransportFailure.php
+|       +-- RecordedRunIdCounterparts.php [Replay ids <-> recorded ids]
 |       +-- ArgusApiCacheOperation.php    [Single cache lookup]
 |       +-- ArgusApiCacheOperations.php   [Batch Redis MGET]
 |       +-- ArgusLoadingParameters.php    [Selective property loading config]
@@ -31,6 +39,7 @@ src/
 +-- Presentation/Api/Batch/Base/Dtos/
 |   +-- BatchRequestDto.php               [Base DTO for batch controllers]
 |   +-- BatchReponseDto.php               [Base DTO for batch responses]
++-- Symfony/EventListeners/ArgusWorkerStateResetter.php [Worker reset before every consumed message]
 +-- Modules/Argus/ArgusModule.php
 ```
 
@@ -83,14 +92,30 @@ Entity.lazyLoad()
 
 **Path parameters:** `{id}` in endpoints auto-replaced from payload's `path` array
 
-**Auth:** Auto-attaches Bearer token from `CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS` account
+**Configuration:** `Base.Repo.argus` in the application config first (`microservices.baseUrl`, `requestSettings`,
+`auth`, `appendDebugFlags`, `trackingHeader`), the environment only as fallback; a call's own headers win over the
+configured ones. Every endpoint carries its request method (`GET:/path`); one without is rejected before the batch
+is sent.
+
+**Auth:** with `auth` on (default), attaches the Bearer token of the `CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS`
+account to every call without its own `Authorization`
+
+**Timeouts:** `#[ArgusLoad(timeout:)]`, else the class constant `DEFAULT_ARGUS_TIMEOUT`, else 0 (none)
+
+**Failures:** settle mode `ArgusSettings::$keepFulfilledCallsWhenOneIsRejected`; per-operation `responseStatusCode`,
+`responseHeaders`, `rejectionReason`; `rejectionReasonForNon2xxAnswer()` + `postProcessLoadResponse(cacheFailure: false)`
+keep a failure out of the cache
+
+**Executor:** a per-batch object created with `new` — never a container service; optional entity methods
+`getArgusCallKind(): ?string` (kind of a call in a recorded run) and `buildTransferStallCurlOptions(): array`
+(low-speed abort) are read when present
 
 **Debugging:** `ArgusLoad::$deactivateArgusCache = true`, `ArgusLoad::$logArgusCalls = true`, `displayCall: true`
 
 ## Environment Variables
 
 ```env
-ARGUS_API_ENDPOINT=https://...                    # Required: batch API base URL
+ARGUS_API_ENDPOINT=https://...                    # Base URL when the config has none
 CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS=1       # Required: SUPER_ADMIN account for auth
 ARGUS_REQUEST_SETTINGS='{"headers":{}}'           # Optional: override default HTTP settings
 ```

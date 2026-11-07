@@ -19,9 +19,38 @@ Argus provides a repository pattern for external HTTP APIs, sitting alongside th
 - **Full CRUD** — LOAD, CREATE, UPDATE, DELETE, PATCH, SYNCHRONIZE operations
 - **Selective property loading** — load only specific child entities on demand
 
+## Configuration
+
+The application config `config/app/Base/Repo/argus.php` (`Base.Repo.argus`) comes first; the environment variables
+below are the fallback where the config has no value.
+
+```php
+return [
+    'microservices' => ['baseUrl' => 'https://your-api-host.com'],   // base URL of relative endpoints
+    'requestSettings' => ['headers' => ['x-api-key' => 'your-key']],  // merged over the built-in defaults
+    'auth' => true,                 // bearer token of the default CLI account on calls without own Authorization
+    'appendDebugFlags' => false,    // append debug=1&errors_as_json=1 to every URL (default: APP_DEBUG)
+    'trackingHeader' => 'rc-tracking', // name of the tracking header; '' sends none
+];
+```
+
+| Key | Default |
+|---|---|
+| `microservices.baseUrl` | env `ARGUS_API_ENDPOINT` |
+| `requestSettings` | env `ARGUS_REQUEST_SETTINGS` (JSON), else the built-in defaults |
+| `auth` | `true` |
+| `appendDebugFlags` | env `APP_DEBUG` |
+| `trackingHeader` | `rc-tracking` |
+
+Headers: the configured headers first, a call's own `headers` over them (a call's `Content-Type`, `x-api-key`,
+`Authorization`, `Accept-Language` win).
+
+Every endpoint carries its request method: `GET:/path`, `POST:https://third-party.example/v1`. An endpoint without
+one is rejected with an `InvalidArgumentException` before any request of the batch is sent.
+
 ## Environment Variables
 
-### Required
+### Required (without config)
 
 ```env
 # Base URL for the Argus batch API gateway
@@ -111,14 +140,16 @@ class ArgusMyEntity extends MyEntity
 
 ## Authentication
 
-Argus automatically authenticates outgoing API calls using a bearer token. The token is generated for the account specified by:
+With `auth` on (the default), Argus authenticates outgoing API calls using a bearer token. The token is generated for the account specified by:
 
 ```env
 # Account ID used for CLI and Argus batch operations (must have ADMIN or SUPERADMIN role)
 CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS=1
 ```
 
-The `ArgusApiOperations` class fetches a refresh token for this account via `AuthService`, exchanges it for an access token, and attaches it as `Authorization: Bearer <token>` to every outgoing request.
+The `ArgusApiOperations` class fetches a refresh token for this account via `AuthService`, exchanges it for an access token, and attaches it as `Authorization: Bearer <token>` to every outgoing request that does not send an `Authorization` of
+its own. Set `auth` to `false` when the gateway does not need it — the token then reaches no endpoint, third-party
+URLs included.
 
 ## Batch endpoints (server-side)
 
@@ -401,10 +432,33 @@ $argusEntity->argusLoad(displayResponse: true);
 
 ## Request tracking
 
-Every outgoing Argus request includes an `rc-tracking` header with:
+Every outgoing Argus request includes a tracking header (`rc-tracking`, configurable through `trackingHeader`) with:
 - `accountId` — the authenticated account
 - `requestUID` — unique ID for the current HTTP/CLI/messenger request (consistent across all operations in one request)
 - `calledFrom` — call stack trace showing route/command/handler and method chain
+
+## Loading options
+
+- **Timeout** — `#[ArgusLoad(timeout: 30)]`; without it a class constant `DEFAULT_ARGUS_TIMEOUT` (seconds) on the repo
+  class or a trait it uses; without both 0 = no timeout.
+- **Settle mode** — `$argus->getArgusSettings()->keepFulfilledCallsWhenOneIsRejected = true`: a call rejected at the
+  transport level (timeout, connection error) gets a null answer and `ArgusApiOperation::$rejectionReason`, the other
+  calls of the batch are handled as usual. Default: the first rejected call fails the whole load.
+- **Status and headers** — `$apiOperation->responseStatusCode` / `->responseHeaders` in `handleLoadResponse()`.
+  `rejectionReasonForNon2xxAnswer()` + `postProcessLoadResponse(..., cacheFailure: false)` keep a non-2xx answer out
+  of the cache.
+- **Private transport** — payload key `ArgusApiOperation::PRIVATE_TRANSPORT => ['response' => 'json'|'binary',
+  'max_response_bytes' => n]`: no redirects, bounded streamed read, never logged.
+- **Split execution** — `sendArgusLoadRequests()` / `advanceArgusLoadRequests()` / `receiveArgusLoadResponses()`:
+  send, do own work while the answers travel, receive.
+- **Call journal** — `ArgusApiOperations::$journalRequests = true` records every sent request with endpoint, transfer
+  time and status in `ArgusApiOperations::getCallJournal()`; `getSentCallCountsByEndpoint()` counts every sent call.
+- **Joining a running computation** — `ArgusCacheInFlightComputation`: a second reader of one cached entity waits for
+  a computation in progress instead of starting it again.
+- **Recorded runs** — `ArgusApiOperations::$transportRecording = ArgusTransportRecording::forRecording()` records
+  every call; `forPlaying($stored)` answers them from the recording.
+- **Worker reset** — before every message a Messenger worker consumes, `ArgusWorkerStateResetter` clears the executor
+  statics, `ArgusLoad::$logArgusCalls` and the per-class `setPropertiesToLoadAlways()` selections.
 
 ## Also provides
 
