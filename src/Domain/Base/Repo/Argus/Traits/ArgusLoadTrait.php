@@ -786,9 +786,15 @@ trait ArgusLoadTrait
         if ($statusCode === null || ($statusCode >= 200 && $statusCode < 300)) {
             return null;
         }
-        $upstreamMessage = is_object($callResponseData)
-            ? trim((string)($callResponseData->message ?? $callResponseData->error ?? ''))
-            : '';
+        $upstreamMessage = '';
+        if (is_object($callResponseData)) {
+            // the message, or an error that is a string or an object carrying one (`{"error": {"message": …}}`)
+            $upstreamError = $callResponseData->message ?? $callResponseData->error ?? null;
+            if (is_object($upstreamError)) {
+                $upstreamError = $upstreamError->message ?? null;
+            }
+            $upstreamMessage = is_scalar($upstreamError) ? trim((string)$upstreamError) : '';
+        }
         return 'http ' . $statusCode . ' from the upstream call' . ($upstreamMessage !== '' ? ': ' . mb_substr($upstreamMessage, 0, 160) : '');
     }
 

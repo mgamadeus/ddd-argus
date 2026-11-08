@@ -122,6 +122,13 @@ class ArgusLoadTraitTest extends TestCase
             ArgusCachedProbe::rejectionReasonForNon2xxAnswer($callResponseData, null)
         );
         self::assertNull(ArgusCachedProbe::rejectionReasonForNon2xxAnswer((object)['status' => 'OK'], null));
+        $openRouterError = json_decode('{"error":{"message":"input too large","code":400}}');
+        $argusApiOperation = (new \DDD\Tests\Argus\Support\ArgusProbeEntity())->createOperation('call-1', 'POST:/service/x');
+        $argusApiOperation->responseStatusCode = 400;
+        self::assertSame(
+            'http 400 from the upstream call: input too large',
+            ArgusCachedProbe::rejectionReasonForNon2xxAnswer($openRouterError, $argusApiOperation)
+        );
     }
 
     public function testTheResponseEnvelopesAreRead(): void

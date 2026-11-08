@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.2
+
+- Fix: `rejectionReasonForNon2xxAnswer()` failed with "Object of class stdClass could not be converted to string" for
+  an error body of the shape `{"error": {"message": …}}` (OpenRouter's); it now reads the nested message.
+
 ## 1.3.1
 
 - Fix: since 1.3.0 passes the TTL to the cache, the empty entry of a failed load (`postProcessLoadResponse($data, false)`)
