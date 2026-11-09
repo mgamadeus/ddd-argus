@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3
+
+- The repository moved to the ddd-framework organisation: github.com/ddd-framework. Links updated; no code changes.
+
 ## 1.3.2
 
 - Fix: `rejectionReasonForNon2xxAnswer()` failed with "Object of class stdClass could not be converted to string" for

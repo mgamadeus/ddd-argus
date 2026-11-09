@@ -1,6 +1,6 @@
 # mgamadeus/ddd-argus
 
-External API repository layer for the [mgamadeus/ddd](https://github.com/mgamadeus/ddd) framework — batched HTTP calls with multi-tier caching.
+External API repository layer for the [mgamadeus/ddd](https://github.com/ddd-framework/ddd) framework — batched HTTP calls with multi-tier caching.
 
 ## Installation
 
@@ -357,7 +357,7 @@ Or with per-endpoint parameters:
 
 ### D) AI language model repo
 
-For LLM-powered repos, use in combination with [ddd-ai](https://github.com/mgamadeus/ddd-ai):
+For LLM-powered repos, use in combination with [ddd-ai](https://github.com/ddd-framework/ddd-ai):
 
 ```php
 #[ArgusLoad(
