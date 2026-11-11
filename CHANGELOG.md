@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+- **Gateway tokens:** `Base.Repo.argus.gateways` names gateways by `origin`, `tokenHeader` and `tokenEnvName`. The
+  token header goes only to calls whose final URL has that origin (scheme, host, port), never to a third-party URL;
+  a call's own header wins. Calls to a gateway origin follow redirects only within the origin and write no debug
+  output. An empty token variable sends nothing and is logged once per process by name. An invalid entry rejects the
+  batch before any request is sent. Without `gateways` nothing changes.
+
 ## 1.3.3
 
 - The repository moved to the ddd-framework organisation: github.com/ddd-framework. Links updated; no code changes.

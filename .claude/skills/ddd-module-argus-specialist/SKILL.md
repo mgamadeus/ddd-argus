@@ -1,9 +1,9 @@
 ---
 name: ddd-module-argus-specialist
-description: "Create and work with Argus external API repositories in the ddd-argus module: batched HTTP calls, multi-tier caching, CRUD, entity conversion, selective and recursive loading. Covers the ArgusLoad attribute, Base.Repo.argus config (baseUrl, requestSettings, auth bearer switch, appendDebugFlags, trackingHeader; env fallback), header order (call headers win), METHOD-prefixed endpoints (others rejected before sending), timeouts (attribute, DEFAULT_ARGUS_TIMEOUT), cache TTLs, settle mode, per-operation status and headers, keeping non-2xx answers out of the cache, response envelopes (OpenAI Responses, Chat Completions), private transport, split execution (send, advance, receive), call journal, ArgusCacheInFlightComputation, ArgusTransportRecording, the worker reset. Use when integrating an external API via Argus, configuring its base URL or headers, a load hangs without timeout, a failed answer got cached, one failed call fails the batch, or recording and replaying Argus calls."
+description: "Create and use Argus external API repositories (ddd-argus): batched HTTP calls, multi-tier caching, CRUD, entity conversion, selective and recursive loading. Covers the ArgusLoad attribute, Base.Repo.argus config (baseUrl, requestSettings, auth bearer switch, appendDebugFlags, trackingHeader, origin-scoped gateway tokens (X-Gateway-Token); env fallback), header order (call headers win), METHOD-prefixed endpoints (others rejected before sending), timeouts (attribute, DEFAULT_ARGUS_TIMEOUT), cache TTLs, settle mode, per-operation status and headers, keeping non-2xx answers out of the cache, OpenAI response envelopes, private transport, split execution (send, advance, receive), call journal, ArgusCacheInFlightComputation, ArgusTransportRecording, the worker reset. Use when integrating an external API via Argus, configuring its base URL, headers or a gateway token, a load hangs without timeout, a failed answer got cached, one failed call fails the batch, or recording and replaying Argus calls."
 metadata:
   author: mgamadeus
-  version: "1.3.1"
+  version: "1.4.0"
   module: mgamadeus/ddd-argus
 ---
 
@@ -83,12 +83,17 @@ class ArgusMyEntity extends MyEntity
 | `auth` | bearer token of `CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS` on calls without own `Authorization` | `true` |
 | `appendDebugFlags` | `debug=1&errors_as_json=1` on every URL | env `APP_DEBUG` |
 | `trackingHeader` | header with account id, request uid, call stack; `''` sends none | `rc-tracking` |
+| `gateways` | name => `origin`, `tokenHeader`, `tokenEnvName`: a token header only for calls of that origin | none |
 
 - **Header order:** configured headers first, the payload's `headers` over them — a call's own `Content-Type`,
   `x-api-key`, `Authorization`, `Accept-Language` win.
 - **Every endpoint carries its request method** (`GET:/path`, `POST:https://api.example.test/v1`). An endpoint without
   one throws `InvalidArgumentException` before ANY request of the batch is sent.
 - With `auth: false` no `Authorization` reaches any endpoint (third-party URLs included) unless the call sets one.
+- **Gateway tokens** (`gateways`): the token header goes only to calls whose FINAL URL has the gateway origin (scheme,
+  host, port); a call's own header wins; such a call follows redirects only within the origin and writes no debug
+  output; an empty token variable sends nothing and logs once per process by name; an invalid entry rejects the batch
+  before sending. Never put a gateway token into `requestSettings.headers`: those reach every URL, third parties too.
 
 ## Naming Convention
 

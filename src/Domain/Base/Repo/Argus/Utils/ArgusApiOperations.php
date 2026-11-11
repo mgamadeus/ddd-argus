@@ -22,7 +22,9 @@ use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\TransferStats;
 use InvalidArgumentException;
 use LogicException;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\UriInterface;
 use ReflectionException;
 use RuntimeException;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -44,6 +46,12 @@ use Throwable;
  * | `auth` | send `Authorization: Bearer` of the default CLI account on every call that carries no own `Authorization` | true |
  * | `appendDebugFlags` | append `debug=1&errors_as_json=1` to every URL | env `APP_DEBUG` |
  * | `trackingHeader` | header carrying account id, request uid and call stack; `''` sends none | `rc-tracking` |
+ * | `gateways` | per name `origin`, `tokenHeader`, `tokenEnvName`: a token header sent only to calls of that origin | none |
+ *
+ * A gateway's token header goes only to calls whose final URL has the gateway's origin (scheme, host, port), never
+ * to another URL, and a call that sends the header itself keeps its own. Such a call follows a redirect only within
+ * the origin and enters no debug output. An empty or missing token variable sends nothing and is logged once per
+ * process, by the variable's name.
  *
  * Header order: the configured headers first, a call's own headers over them (a call's `Content-Type`, `x-api-key`,
  * `Authorization`, `Accept-Language` win).
@@ -60,6 +68,15 @@ class ArgusApiOperations
 
     /** @var string The tracking header sent when the config names none */
     public const string DEFAULT_TRACKING_HEADER = 'rc-tracking';
+
+    /** @var string The pattern a gateway's token header name must match (an HTTP header token) */
+    public const string GATEWAY_TOKEN_HEADER_PATTERN = '/^[A-Za-z0-9!#$%&\'*+.^_`|~-]+$/';
+
+    /** @var int The most redirects a call to a gateway origin follows within that origin */
+    public const int GATEWAY_MAX_REDIRECTS = 5;
+
+    /** @var bool[] Token variables already logged as empty in this process, by variable name */
+    protected static array $loggedEmptyGatewayTokenEnvNames = [];
 
     /** @var int The most journal entries kept ({@see getCallJournal()}); older ones are dropped */
     public const int CALL_JOURNAL_MAX_ENTRIES = 2000;
@@ -610,6 +627,8 @@ class ArgusApiOperations
                 );
             }
         }
+        // an invalid gateway configuration rejects the batch before any request is sent
+        $gatewaysByName = self::getGatewaysByName();
         $callArgusRequestConfig = self::getRequestSettings();
         $microserviceBaseUrl = self::getMicroserviceBaseUrl();
         $appendDebugFlags = self::isAppendingDebugFlags();
@@ -710,6 +729,8 @@ class ArgusApiOperations
                         }
                     };
                 }
+
+                $parametersAndCallId = self::applyGatewayToCall($gatewaysByName, $callUrl, $parametersAndCallId);
 
                 if (self::$transportRecording !== null) {
                     // a recorded run matches calls by their kind (a request option for the recording's handler, never sent)
@@ -1108,6 +1129,138 @@ class ArgusApiOperations
         $refreshToken = AuthService::instance()->getRefreshTokenForAccountId($defaultAccount->id, isShortLived: false);
         $accessToken = AuthService::instance()->getAccessTokenForAccountBasedOnRefreshToken($refreshToken, false);
         return is_string($accessToken) && $accessToken !== '' ? $accessToken : null;
+    }
+
+    /**
+     * The configured gateways (`Base.Repo.argus.gateways`), keyed by name, each with its normalised `origin`; [] when
+     * none are configured.
+     *
+     * @return string[][] name => [origin, tokenHeader, tokenEnvName]
+     * @throws InvalidArgumentException When a gateway lacks a valid origin, token header or token variable name
+     */
+    protected static function getGatewaysByName(): array
+    {
+        $configuredGateways = self::getArgusConfig()['gateways'] ?? [];
+        if (!is_array($configuredGateways)) {
+            throw new InvalidArgumentException('Argus config "gateways" must be a map of gateway name => settings');
+        }
+        $gatewaysByName = [];
+        foreach ($configuredGateways as $gatewayName => $gatewaySettings) {
+            $configuredOrigin = is_array($gatewaySettings) && is_string($gatewaySettings['origin'] ?? null)
+                ? $gatewaySettings['origin']
+                : '';
+            $originParts = parse_url($configuredOrigin);
+            $origin = self::getOriginOfUrl($configuredOrigin);
+            $tokenHeader = is_array($gatewaySettings) ? ($gatewaySettings['tokenHeader'] ?? null) : null;
+            $tokenEnvName = is_array($gatewaySettings) ? ($gatewaySettings['tokenEnvName'] ?? null) : null;
+            if ($origin === null || !is_array($originParts) || !in_array($originParts['path'] ?? '', ['', '/'], true)
+                || isset($originParts['query']) || isset($originParts['fragment']) || isset($originParts['user'])) {
+                throw new InvalidArgumentException(
+                    'Argus gateway "' . $gatewayName . '": "origin" must be scheme and host (and port), e.g. "https://gateway.example.com"'
+                );
+            }
+            if (!is_string($tokenHeader) || !preg_match(self::GATEWAY_TOKEN_HEADER_PATTERN, $tokenHeader)) {
+                throw new InvalidArgumentException('Argus gateway "' . $gatewayName . '": "tokenHeader" must be a header name');
+            }
+            if (!is_string($tokenEnvName) || $tokenEnvName === '') {
+                throw new InvalidArgumentException('Argus gateway "' . $gatewayName . '": "tokenEnvName" must name an environment variable');
+            }
+            $gatewaysByName[(string)$gatewayName] = [
+                'origin' => $origin,
+                'tokenHeader' => $tokenHeader,
+                'tokenEnvName' => $tokenEnvName,
+            ];
+        }
+        return $gatewaysByName;
+    }
+
+    /**
+     * The origin of a URL as `scheme://host[:port]`, lower-cased, without the scheme's default port; null for a URL
+     * without scheme or host.
+     */
+    public static function getOriginOfUrl(string $url): ?string
+    {
+        $urlParts = parse_url($url);
+        if (!is_array($urlParts) || !isset($urlParts['scheme'], $urlParts['host']) || $urlParts['host'] === '') {
+            return null;
+        }
+        $scheme = strtolower($urlParts['scheme']);
+        $host = strtolower($urlParts['host']);
+        $port = $urlParts['port'] ?? null;
+        $defaultPort = match ($scheme) {
+            'https' => 443,
+            'http' => 80,
+            default => null,
+        };
+        return $scheme . '://' . $host . ($port !== null && $port !== $defaultPort ? ':' . $port : '');
+    }
+
+    /**
+     * Applies the gateway whose origin the call's final URL has: its token header (unless the call sends that
+     * header itself or the token variable is empty), redirects only within the origin, no debug output. A call of
+     * no gateway's origin is returned unchanged.
+     *
+     * @param string[][] $gatewaysByName {@see getGatewaysByName()}
+     * @param string $callUrl the final URL of the call
+     * @param array $parametersAndCallId the call's request options
+     * @return array the request options
+     */
+    protected static function applyGatewayToCall(array $gatewaysByName, string $callUrl, array $parametersAndCallId): array
+    {
+        $callOrigin = self::getOriginOfUrl($callUrl);
+        if ($callOrigin === null) {
+            return $parametersAndCallId;
+        }
+        foreach ($gatewaysByName as $gatewayName => $gateway) {
+            if ($gateway['origin'] !== $callOrigin) {
+                continue;
+            }
+            $headers = is_array($parametersAndCallId['headers'] ?? null) ? $parametersAndCallId['headers'] : [];
+            if (!self::hasHeader($headers, $gateway['tokenHeader'])) {
+                $token = self::getGatewayToken($gateway['tokenEnvName']);
+                if ($token !== null) {
+                    $headers[$gateway['tokenHeader']] = $token;
+                } elseif (!isset(self::$loggedEmptyGatewayTokenEnvNames[$gateway['tokenEnvName']])) {
+                    self::$loggedEmptyGatewayTokenEnvNames[$gateway['tokenEnvName']] = true;
+                    error_log(
+                        'Argus gateway "' . $gatewayName . '": environment variable ' . $gateway['tokenEnvName']
+                        . ' is empty, calls to ' . $gateway['origin'] . ' are sent without ' . $gateway['tokenHeader']
+                    );
+                }
+            }
+            $parametersAndCallId['headers'] = $headers;
+            // the token header must not reach another origin: a redirect is followed only within the gateway origin
+            if (($parametersAndCallId['allow_redirects'] ?? true) !== false) {
+                $gatewayOrigin = $gateway['origin'];
+                $parametersAndCallId['allow_redirects'] = [
+                    'max' => self::GATEWAY_MAX_REDIRECTS,
+                    'strict' => false,
+                    'referer' => false,
+                    'protocols' => ['https', 'http'],
+                    'track_redirects' => false,
+                    'on_redirect' => static function (RequestInterface $request, ResponseInterface $response, UriInterface $redirectUri) use ($gatewayName, $gatewayOrigin): void {
+                        if (self::getOriginOfUrl((string)$redirectUri) !== $gatewayOrigin) {
+                            throw new RuntimeException(
+                                'Argus gateway "' . $gatewayName . '" answered with a redirect to another origin; it was not followed'
+                            );
+                        }
+                    },
+                ];
+            }
+            $parametersAndCallId['debug'] = false;
+            return $parametersAndCallId;
+        }
+        return $parametersAndCallId;
+    }
+
+    /** The token of a gateway from its environment variable; null when the variable is empty or missing */
+    protected static function getGatewayToken(string $tokenEnvName): ?string
+    {
+        $token = Config::getEnv($tokenEnvName);
+        if (is_int($token) || is_float($token)) {
+            $token = (string)$token;
+        }
+        return is_string($token) && trim($token) !== '' ? trim($token) : null;
     }
 
     /** Whether a header map carries a header, case-insensitively */

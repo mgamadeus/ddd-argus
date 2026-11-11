@@ -31,6 +31,13 @@ return [
     'auth' => true,                 // bearer token of the default CLI account on calls without own Authorization
     'appendDebugFlags' => false,    // append debug=1&errors_as_json=1 to every URL (default: APP_DEBUG)
     'trackingHeader' => 'rc-tracking', // name of the tracking header; '' sends none
+    'gateways' => [                 // token headers sent only to calls of one origin
+        'secure' => [
+            'origin' => 'https://gateway.example.com',   // scheme and host (and port)
+            'tokenHeader' => 'X-Gateway-Token',
+            'tokenEnvName' => 'ARGUS_GATEWAY_TOKEN',     // the token itself stays in the environment
+        ],
+    ],
 ];
 ```
 
@@ -41,6 +48,7 @@ return [
 | `auth` | `true` |
 | `appendDebugFlags` | env `APP_DEBUG` |
 | `trackingHeader` | `rc-tracking` |
+| `gateways` | none |
 
 Headers: the configured headers first, a call's own `headers` over them (a call's `Content-Type`, `x-api-key`,
 `Authorization`, `Accept-Language` win).
@@ -150,6 +158,24 @@ CLI_DEFAULT_ACCOUNT_ID_FOR_CLI_OPERATIONS=1
 The `ArgusApiOperations` class fetches a refresh token for this account via `AuthService`, exchanges it for an access token, and attaches it as `Authorization: Bearer <token>` to every outgoing request that does not send an `Authorization` of
 its own. Set `auth` to `false` when the gateway does not need it — the token then reaches no endpoint, third-party
 URLs included.
+
+### Gateway tokens
+
+A gateway that wants a token header of its own is named under `gateways`. Its token header goes only to calls whose
+final URL (base URL plus relative endpoint, or an absolute URL) has the gateway's `origin`: scheme, host and port, the
+scheme's default port included or not. Every other call, a third-party URL or another port of the same host, gets no
+token.
+
+- A call that sends the header itself keeps its own value.
+- A call to a gateway origin follows a redirect only within that origin (at most 5); a redirect to another origin
+  fails the call, so the token cannot leave the gateway. Such a call writes no debug output.
+- An empty or missing token variable sends no header and logs once per process, naming the variable, never a value.
+  An environment without the token keeps working against gateways that need none.
+- The token is not part of the tracking header, the call journal, the executed-calls log or a transport recording.
+- An invalid entry (an origin with a path, query or no scheme, a header name with spaces, no variable name) rejects
+  the batch with an `InvalidArgumentException` before any request is sent.
+
+Several tokens for one gateway (rotation) are the gateway's business: the application sends the one in its variable.
 
 ## Batch endpoints (server-side)
 
